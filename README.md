@@ -12,14 +12,6 @@ BronchOpt provides a synthetic benchmark dataset for evaluating bronchoscopy nav
 - **Evaluation framework**: Tools for evaluating pose estimation methods using multiple metrics
 - **Depth rendering**: GPU-accelerated RGB and depth rendering.
 
-## Qualitative Results
-
-Below is an example video showing qualitative results of BronchOpt's pose optimization on the BronchOpt benchmark. The visualization shows the input synthetic bronchoscopy image, the aligned (predicted) pose compared to the ground truth, and the rendered 3D mesh overlay.
-
-https://user-images.githubusercontent.com/18592130/319612447-973af51c-42d1-4aad-b543-8e0ec82ebd91.mp4
-
-
-
 
 ## Our Quantitative Results
 
