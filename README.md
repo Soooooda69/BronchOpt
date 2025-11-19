@@ -23,7 +23,7 @@ https://user-images.githubusercontent.com/18592130/319612447-973af51c-42d1-4aad-
 
 ## Our Quantitative Results
 
-Below we report the quantitative comparison between OffsetNet and the proposed BronchOpt on the BronchOpt synthetic benchmark across three difficulty levels. The evaluation metrics include Disparity Similarity (DS~$\uparrow$), Normal Correlation (NC~$\uparrow$), Scale-Invariant Depth Error (SI~$\downarrow$), translation error (mm,~$\downarrow$), rotation error (rad,~$\downarrow$), and success rate (\%). 
+Below is a quantitative comparison between OffsetNet and our proposed BronchOpt method on the BronchOpt synthetic benchmark, evaluated across three difficulty levels. The metrics reported are: Disparity Similarity (DS, ↑), Normal Correlation (NC, ↑), Scale-Invariant Depth Error (SI, ↓), translation error in mm (↓), rotation error in radians (↓), and success rate (%). 
 
 The initial camera poses (Init) from the robotic system show increasing difficulty across levels, with mean translation/rotation distances of **$1.94 \pm 2.03$ mm / $0.14 \pm 0.11$ rad** for *Easy*, **$4.29 \pm 2.68$ mm / $0.34 \pm 0.15$ rad** for *Medium*, and **$6.96 \pm 3.09$ mm / $0.49 \pm 0.25$ rad** for *Hard* cases. The reported metrics are computed only over successful cases.
 
