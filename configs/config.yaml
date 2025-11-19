@@ -1,0 +1,20 @@
+device: 'cuda:0'
+project: 'bronchOpt'
+data_root: './processed/bronch_real_aero1'
+output: 'output'
+
+cam:
+  W: 200
+  H: 200
+  intrinsics:
+    fx: 110.21
+    fy: 110.31
+    cx: 100.58
+    cy: 103.69
+  znear: 0.00001
+  zfar: 0.1
+
+eval:
+  start_idx: 1
+  end_idx: -1
+  subsample: 1
