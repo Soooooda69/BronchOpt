@@ -186,14 +186,13 @@ The evaluation configuration is managed via Hydra. Key parameters in `configs/co
 If you use this dataset or code in your research, please cite:
 
 ```bibtex
-@misc{shu2025bronchoptvisionbasedpose,
-      title={BronchOpt : Vision-Based Pose Optimization with Fine-Tuned Foundation Models for Accurate Bronchoscopy Navigation}, 
-      author={Hongchao Shu and Roger D. Soberanis-Mukul and Jiru Xu and Hao Ding and Morgan Ringel and Mali Shen and Saif Iftekar Sayed and Hedyeh Rafii-Tari and Mathias Unberath},
-      year={2025},
-      eprint={2511.09443},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV},
-      url={https://arxiv.org/abs/2511.09443}, 
+@article{shu2026bronchopt,
+  title={BronchOpt: vision-based pose optimization with fine-tuned foundation models for accurate bronchoscopy navigation},
+  author={Shu, Hongchao and Soberanis-Mukul, Roger D and Xu, Jiru and Ding, Hao and Ringel, Morgan and Shen, Mali and Sayed, Saif Iftekar and Rafii-Tari, Hedyeh and Unberath, Mathias},
+  journal={International Journal of Computer Assisted Radiology and Surgery},
+  pages={1--9},
+  year={2026},
+  publisher={Springer}
 }
 ```
 
