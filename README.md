@@ -42,7 +42,7 @@ For more details, please refer to the [paper](https://arxiv.org/abs/2511.09443).
 
 You can download the complete BronchOpt synthetic evaluation dataset from the following link:
 
-[BronchOpt Dataset](https://livejohnshopkins-my.sharepoint.com/:f:/g/personal/hshu4_jh_edu/ErTy5BR_H3FEiu43q0H0pGUBx5mGTeQub8Mu9yxpAil6rg?e=k2PZZV)
+[BronchOpt Dataset](https://livejohnshopkins-my.sharepoint.com/:f:/g/personal/hshu4_jh_edu/IgC08uQUfx9xRIruN6tB9KRlAceZhk3kLm_DLvcsaQIpeq4?e=9Vked6)
 
 Simply extract the downloaded files into your desired directory. Each sequence (e.g., `bronch_real_aero1`, `bronch_real_aero2`, ...) will be a subdirectory containing the necessary images, pose data, and mesh files as described below.
 
