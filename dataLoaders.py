@@ -1,104 +1,78 @@
-import os
+"""Loading of benchmark sequences (``bronch_real_aero*``).
+
+A sequence folder holds ``eval_src.json`` (pairs), ``pose_dict.json`` (poses),
+``fake_images/`` (CycleGAN images, 256x256) and ``localMedium.ply`` (the airway mesh).
+
+Poses are 7-vectors ``[tx, ty, tz, qx, qy, qz, qw]``: camera-to-world, metres, Hamilton
+quaternion with the scalar last (the LieTorch ``SE3`` layout and SciPy ``as_quat()`` order).
+"""
 import json
-import torch
-import numpy as np
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
+import os
+import re
+
 import cv2
+import torch
+from torch.utils.data import Dataset
+
+
+def sequence_roots(cfg):
+    """Sequence folders to evaluate: ``cfg.data_root``, or every ``bronch_real_aero*``
+    folder under ``cfg.dataset_root`` when ``data_root == 'all'``."""
+    if cfg.data_root != 'all':
+        return [cfg.data_root]
+    names = [d for d in os.listdir(cfg.dataset_root)
+             if d.startswith('bronch_real_aero') and os.path.isdir(os.path.join(cfg.dataset_root, d))]
+    names.sort(key=lambda d: int(re.sub(r'\D', '', d) or 0))
+    return [os.path.join(cfg.dataset_root, d) for d in names]
+
+
+def key_to_relpath(key):
+    """Image path of a pose key without extension: ``0_00012`` -> ``12`` (centerline node),
+    ``1_00741_00008`` -> ``741/8`` (sample 8 around node 741)."""
+    return '/'.join(str(int(k)) for k in key.split('_')[1:])
+
 
 class PoseEvalDataset(Dataset):
-    def __init__(self, cfg, level=None):
-        self.cfg = cfg
-        self.randomize = cfg.data.randomize
-        self.rs = transforms.Resize((cfg.model.input_dim.h, cfg.model.input_dim.w))
+    """Pairs of one sequence, optionally restricted to one difficulty level (1, 2 or 3).
 
-        # Support multiple data roots
-        if cfg.data_root == 'all':
-            data_roots = [f'./processed/bronch_real_aero{str(i)}' for i in range(1,15)]
-        else:
-            data_roots = [cfg.data_root]
+    Each item holds the anchor (target) view's CycleGAN image, the anchor pose (ground
+    truth) and the sample pose (initial guess). ``cfg.eval.start_idx / end_idx / subsample``
+    select a slice of the pairs (``end_idx = -1`` means to the end).
+    """
 
-        self.f_data_src_list = []
-        self.f_pose_list = []
-        self.f_fake_rgb_list = []
+    def __init__(self, cfg, root, level=None):
+        self.root = root
+        self.size = (int(cfg.model.input_dim.w), int(cfg.model.input_dim.h))
+        self.fake_dir = os.path.join(root, 'fake_images')
 
-        for root in data_roots:
-            train_root = os.path.join(root, ".")
-            self.f_data_src_list.append(os.path.join(train_root, "eval_src.json"))
-            self.f_pose_list.append(os.path.join(train_root, "pose_dict.json"))
-            # self.f_depth_list.append(os.path.join(train_root, "depths"))
-            self.f_fake_rgb_list.append(os.path.join(train_root, "fake_images"))
-            # self.f_rgb_list.append(os.path.join(train_root, "images"))
+        with open(os.path.join(root, 'eval_src.json')) as f:
+            pairs = json.load(f)['rel']
+        if level is not None:
+            pairs = [p for p in pairs if p.get('level', 0) == level]
+        end = None if cfg.eval.end_idx in (-1, None) else int(cfg.eval.end_idx)
+        self.pairs = pairs[int(cfg.eval.start_idx):end:int(cfg.eval.subsample)]
 
-        # Check all paths exist
-        for paths in zip(self.f_data_src_list, self.f_pose_list):
-            for p in paths:
-                assert os.path.exists(p), f"Path does not exist: {p}"
+        with open(os.path.join(root, 'pose_dict.json')) as f:
+            self.poses = {k: torch.tensor(v['pose'], dtype=torch.float32) for k, v in json.load(f).items()}
 
-        # Aggregate keys and poses from all data roots
-        self.keys = []
-        # self.poses = {}
-        self.poses: list[dict[str, tuple[torch.Tensor,int,int]]] = []
-        self.key_to_dataset_idx = []
-
-        for dataset_idx, (f_data_src, f_pose) in enumerate(zip(self.f_data_src_list,
-                                                               self.f_pose_list)):
-            # create an empty dict for this dataset
-            self.poses.append({})
-
-            # load key relations -------------------------------------------------
-            with open(f_data_src) as f:
-                rel_keys = json.load(f)["rel"]
-                if level is None:
-                    rel_keys_level = rel_keys
-                else:
-                    rel_keys_level = [k for k in rel_keys if k.get('level', 0) == level]
-                self.keys.extend(rel_keys_level)
-                self.key_to_dataset_idx.extend([dataset_idx] * len(rel_keys_level))
-
-            # load poses ---------------------------------------------------------
-            with open(f_pose) as f:
-                poses = json.load(f)
-                for key, item in poses.items():
-                    self.poses[dataset_idx][key] = (
-                        torch.tensor(
-                            [item["pose"][0],
-                             item["pose"][1],
-                             item["pose"][2]] + item["pose"][3:]
-                        ),                     # 7-vector (xyz [cm] + qwxyz)
-                        item["gen"],
-                        item["branch"]
-                    )
-
-    def _load_data(self, key, dataset_idx):
-        f_rgb = self.f_rgb_list[dataset_idx]
-        mesh_id = f_rgb.split('/')[-3].split('_')[-1]
-        f_fake_rgb = self.f_fake_rgb_list[dataset_idx]
-
-        f = f"{'/'.join([str(int(k)) for k in key.split('_')[1:]])}.npy"
-        fake_rgb_img_f = os.path.join(f_fake_rgb, f.replace(".npy", ".png"))
-
-        fake_rgb = cv2.imread(fake_rgb_img_f)
-        fake_rgb = cv2.cvtColor(fake_rgb, cv2.COLOR_BGR2RGB)
-        fake_rgb = cv2.resize(fake_rgb, (224, 224))
-        
-        return fake_rgb, mesh_id
+    def load_fake_rgb(self, key):
+        """CycleGAN image of ``key`` as a [3,H,W] float tensor in [0,1], resized to the model input."""
+        path = os.path.join(self.fake_dir, key_to_relpath(key) + '.png')
+        img = cv2.imread(path)
+        if img is None:
+            raise FileNotFoundError(path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = cv2.resize(img, self.size)
+        return torch.from_numpy(img).float().permute(2, 0, 1) / 255.0
 
     def __len__(self):
-        return len(self.keys)
+        return len(self.pairs)
 
     def __getitem__(self, idx):
-        k1 = self.keys[idx]["anchor"]
-        k2 = self.keys[idx]["sample"]
-        dataset_idx = self.key_to_dataset_idx[idx]
-
-        anchor_fake_rgb, mesh_id = self._load_data(k1, dataset_idx)
-        sampled_fake_rgb, mesh_id = self._load_data(k2, dataset_idx)
-
-        anchor_pose  = self.poses[dataset_idx][k1][0]   # only the 7-vector
-        sampled_pose = self.poses[dataset_idx][k2][0]
-     
-        sampled_fake_rgb = torch.from_numpy(sampled_fake_rgb).float().permute(2, 0, 1) / 255.0
-        sampled_sim_rgb = torch.from_numpy(sampled_sim_rgb).float().permute(2, 0, 1) / 255.0
-        anchor_fake_rgb = torch.from_numpy(anchor_fake_rgb).float().permute(2, 0, 1) / 255.0
-        return sampled_fake_rgb, anchor_fake_rgb, sampled_pose, anchor_pose, mesh_id
+        anchor, sample = self.pairs[idx]['anchor'], self.pairs[idx]['sample']
+        return {
+            'anchor_key': anchor,
+            'anchor_rgb': self.load_fake_rgb(anchor),   # query image
+            'anchor_pose': self.poses[anchor],          # ground truth
+            'sample_pose': self.poses[sample],          # initial pose
+        }

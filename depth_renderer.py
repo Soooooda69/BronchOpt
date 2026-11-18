@@ -9,6 +9,19 @@ from torch.nn import functional as F
 from third_party.lietorch import SE3
 
 class DepthRenderer(nn.Module):
+    """Renders depth (and optionally RGB) of the airway mesh with nvdiffrast.
+
+    Input poses are camera-to-world [B,4,4] matrices (or LieTorch SE3) in metres, OpenCV camera
+    axes (+x right, +y down, +z forward). Outputs are [B,1,H,W] depth and [B,3,H,W] RGB in [0,1].
+
+    * Depth is the rasterizer's clip-space z: d = a*z - b with a = (f+n)/(f-n) and
+      b = 2nf/(f-n) (n = znear, f = zfar + 0.1), i.e. z = (d + 2.0e-5) / 1.0001 m for the
+      default config. 0 means no surface was hit.
+    * The projection mirrors the principal point vertically and samples pixel centres, so the
+      OpenCV intrinsics of the output are (fx, fy, cx - 0.5, H - cy - 0.5), not cfg.cam.intrinsics;
+      (110.21, 110.31, 100.08, 95.81) at 200x200.
+    """
+
     def __init__(self, cfg, mesh_path=None):
         super().__init__()
         self.znear = cfg.cam.znear
@@ -17,10 +30,11 @@ class DepthRenderer(nn.Module):
         self.glctx = dr.RasterizeCudaContext() # Initialize later based on device
         self.intrinsics = cfg.cam.intrinsics
         self.cfg = cfg  # Store the configuration for later use
-        if cfg.data_root == 'all':
+        if mesh_path is None and cfg.data_root == 'all':
             # Load all meshes in the directory and store them in a dict
-            ids = [f.split('_')[-1] for f in os.listdir('./processed') if f.startswith('bronch_real_')]
-            data_roots = [f'./processed/bronch_real_{i}' for i in ids]
+            dataset_root = cfg.get('dataset_root', './processed')
+            ids = [f.split('_')[-1] for f in os.listdir(dataset_root) if f.startswith('bronch_real_')]
+            data_roots = [f'{dataset_root}/bronch_real_{i}' for i in ids]
             mesh_dir = [os.path.join(data_root, 'localMedium.ply') for data_root in data_roots]
             self.meshes_dict = {}
             # store meshes properties
@@ -120,7 +134,7 @@ class DepthRenderer(nn.Module):
         self.glctx = dr.RasterizeCudaContext(device=device)
         self.glproj = self.glproj.to(device)
         self.convert_rotation = self.convert_rotation.to(device)
-        if mesh_id is not None and self.cfg.data_root == 'all':
+        if mesh_id is not None and hasattr(self, 'meshes_dict'):
             depths = [None] * len(mesh_id)
             colors = [None] * len(mesh_id)
             tri_ids = [None] * len(mesh_id)

@@ -1,0 +1,28 @@
+# Settings used to generate the released AeroPath benchmark (generation/run_aeropath.sh).
+device: 'cuda:0'
+data_root: './processed/bronch_real_aero1'   # one case folder (depth_filter.py takes <case>/train)
+
+cam:   # same renderer camera as configs/config.yaml
+  W: 200
+  H: 200
+  intrinsics:
+    fx: 110.21
+    fy: 110.31
+    cx: 100.58
+    cy: 103.69
+  znear: 0.00001
+  zfar: 0.1
+
+model:
+  mixed_precision: True   # autocast around the SDF barrier, as in the original runs
+
+data:
+  train_data: True        # render centerline nodes + perturbed samples into <case>/train
+  color_render: True
+  blank_filter: 0.05
+  train_num_samples: 5    # perturbed samples per centerline node
+  train_radius: 0.010     # max translation of a sample (m)
+  train_rot_degs: 25      # max rotation of a sample (deg)
+  pairs_per_node: 1       # eval pairs drawn per centerline node
+  pair_range: 1           # sigma of the ancestor-hop offset between anchor and sample nodes
+  num_levels: 3           # difficulty levels (quantiles of pose_dis)

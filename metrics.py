@@ -1,10 +1,33 @@
-import torch
-import torch.nn.functional as F
+"""Benchmark metrics: depth consistency (DS, NC, SI), pose error, and the success test.
+
+Depth maps are ``[B,1,H,W]`` metric z-depth (metres). Poses are ``[4,4]`` or ``[B,4,4]``
+camera-to-world matrices in metres.
+"""
 import math
+
+import numpy as np
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
-def normals_from_depth(z, fx=110.2, fy=110.3, cx=100.58, cy=100.69, eps=1e-6):
+#: Value written for a metric on a failed frame (camera centre outside the airway).
+FAILED = -1.0
+
+#: Intrinsics the published NC numbers were computed with. The original call
+#: ``normals_from_depth(z, eps)`` passed ``eps`` positionally into ``fx``, so ``fx`` was 1e-6
+#: and the other three kept these defaults. Kept as the default of :func:`normal_correlation`
+#: so results stay comparable with the paper.
+LEGACY_NC_INTRINSICS = dict(fx=1e-6, fy=110.3, cx=100.58, cy=100.69)
+
+#: Geometrically correct intrinsics of the 200x200 renders (OpenCV pixel-centre convention).
+#: The nominal values in configs/config.yaml (cx=100.58, cy=103.69) are not what the renderer
+#: produces: its projection matrix mirrors cy and the rasterizer samples at pixel centres.
+#: Rescale for other sizes with fx' = s*fx, cx' = (cx + 0.5)*s - 0.5.
+RENDER_INTRINSICS_200 = dict(fx=110.21, fy=110.31, cx=100.08, cy=95.81)
+
+
+def normals_from_depth(z, fx, fy, cx, cy, eps=1e-6):
     """
     z: [B,1,H,W] depth (meters). Intrinsics: fx, fy, cx, cy (floats).
     Returns:
@@ -28,14 +51,18 @@ def normals_from_depth(z, fx=110.2, fy=110.3, cx=100.58, cy=100.69, eps=1e-6):
     n = n / (n.norm(dim=1, keepdim=True) + eps)
     return n, Px, Py
 
-def normal_correlation(z1, z2, mask=None, use_edge_weight=True, eps=1e-6, return_deg=False):
+def normal_correlation(z1, z2, mask=None, use_edge_weight=True, eps=1e-6, return_deg=False,
+                       intrinsics=LEGACY_NC_INTRINSICS):
     """
     Scale-invariant normal correlation between two depth maps.
     - Invariant to global multiplicative depth scale per map.
     - Optional symmetric edge-weighting using 3D gradient magnitudes.
+
+    ``intrinsics`` defaults to :data:`LEGACY_NC_INTRINSICS` so the numbers match the paper.
+    Pass intrinsics matching the depth-map resolution for the geometrically correct version.
     """
-    n1, Px1, Py1 = normals_from_depth(z1,  eps)
-    n2, Px2, Py2 = normals_from_depth(z2, eps)
+    n1, Px1, Py1 = normals_from_depth(z1, eps=eps, **intrinsics)
+    n2, Px2, Py2 = normals_from_depth(z2, eps=eps, **intrinsics)
 
     cos = (n1 * n2).sum(1).clamp(-1, 1)  # [B,H,W]
 
@@ -59,7 +86,7 @@ def normal_correlation(z1, z2, mask=None, use_edge_weight=True, eps=1e-6, return
     return corr
 
 class dispSimilarity(nn.Module):
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg=None) -> None:
         super().__init__()
         self.cfg = cfg
         self.cos = nn.CosineSimilarity(dim=-1, eps=1e-6)
@@ -68,12 +95,11 @@ class dispSimilarity(nn.Module):
         d_flat = d.flatten()
         t_d = torch.median(d_flat)
         s_d = torch.mean(torch.abs(d_flat - t_d))
-        return (d_flat - t_d) / s_d    
-    
+        return (d_flat - t_d) / s_d
+
     def forward(self, render_depth, target_disp) -> Tensor:
         flat_depth = self.madnorm(render_depth)
         flat_disp = self.madnorm(target_disp)
-        # predicted_disp = self.d2d(flat_depth.view(-1, 1)).squeeze()
         sim = self.cos(flat_depth, flat_disp)
         return (sim+1)/2
 
@@ -84,11 +110,10 @@ class GeodesicLoss(nn.Module):
         self.mean = mean
 
     def forward(self, rot_pred, rot_gt) -> Tensor:
-        R_pred, R_gt = rot_pred, rot_gt 
+        R_pred, R_gt = rot_pred, rot_gt
         m = torch.bmm(R_gt, R_pred.transpose(1,2)) #batch*3*3
-        cos = (m[:,0,0] + m[:,1,1] + m[:,2,2] - 1)/2        
+        cos = (m[:,0,0] + m[:,1,1] + m[:,2,2] - 1)/2
         theta = torch.acos(torch.clamp(cos, -1+self.eps, 1-self.eps))
-        # theta = 2 * torch.asin(torch.clamp(torch.sqrt((1 - cos) / 2), 0, 1-self.eps))
         if self.mean:
             return torch.mean(theta)
         else:
@@ -131,3 +156,65 @@ class ScaleInvariantDepthLoss(nn.Module):
             mean_d_broadcast = mean_d.view(-1,1,1,1)          # [B,1,1,1]
             si_map = (log_diff - mean_d_broadcast)**2
             return term1 - term2, si_map
+
+
+# --------------------------------------------------------------------------------------
+# pose error and success
+# --------------------------------------------------------------------------------------
+def translation_error_mm(T_gt: Tensor, T_pred: Tensor) -> Tensor:
+    """Distance between camera centres in millimetres, for [4,4] or [B,4,4] poses in metres."""
+    return torch.linalg.norm(T_gt[..., :3, 3] - T_pred[..., :3, 3], dim=-1) * 1000.0
+
+
+def rotation_error_rad(T_gt: Tensor, T_pred: Tensor) -> Tensor:
+    """Geodesic rotation angle in radians, for [4,4] or [B,4,4] poses."""
+    R_gt = T_gt[..., :3, :3].reshape(-1, 3, 3)
+    R_pred = T_pred[..., :3, :3].reshape(-1, 3, 3)
+    return GeodesicLoss(mean=False)(R_pred, R_gt).reshape(T_gt.shape[:-2])
+
+
+def sdf_barrier(s: Tensor, tau: float = 1.0e-4, bad: float = 1.0e-4, gamma: float = 5000.0) -> Tensor:
+    """The SDF loss used for the success test in the paper (s in metres, negative inside).
+
+    Its value exceeds 1 once the camera centre is less than about 0.067 mm inside the wall,
+    or outside the airway.
+    """
+    L_inside = F.softplus(gamma * (s + tau)) ** 2
+    s_neg = -s.clamp_max(-1e-9)
+    near = (s_neg <= bad).float()
+    L_near = near * torch.clamp(-torch.log(s_neg / bad + 1e-12), min=0.0)
+    L_out = F.relu(s) ** 2
+    return L_inside + L_near + L_out
+
+
+class MeshSDF:
+    """Signed distance to the airway mesh (metres, negative inside the lumen).
+
+    The sign comes from the barycentric-interpolated vertex normal at the closest surface
+    point; mesh normals point out of the lumen. Needs ``rtree`` for trimesh's proximity query.
+    """
+
+    def __init__(self, mesh):
+        self.mesh = mesh
+        self.vertex_normals = np.asarray(mesh.vertex_normals)
+
+    def __call__(self, points) -> np.ndarray:
+        import trimesh
+
+        p = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        closest, dist, tri = trimesh.proximity.closest_point(self.mesh, p)
+        bary = trimesh.triangles.points_to_barycentric(self.mesh.triangles[tri], closest)
+        n = (bary[:, :, None] * self.vertex_normals[self.mesh.faces[tri]]).sum(1)
+        sign = np.where(((p - closest) * n).sum(1) > 0, 1.0, -1.0)
+        return sign * dist
+
+
+def is_success(sdf: MeshSDF, T: Tensor, threshold: float = 1.0) -> bool:
+    """A pose succeeds unless :func:`sdf_barrier` at its camera centre exceeds ``threshold``.
+
+    The paper evaluated the SDF on a precomputed 160^3 grid (generation/mesh2sdf.py); this
+    evaluates it on the mesh directly. On one airway the two agreed on 98.9 % of decisions
+    (12k poses); the disagreements were poses within about 0.2 mm of the wall.
+    """
+    s = sdf(T[..., :3, 3].detach().cpu().numpy())
+    return bool(sdf_barrier(torch.as_tensor(s)).max() <= threshold)

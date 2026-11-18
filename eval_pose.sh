@@ -1,10 +1,14 @@
-## AeroPath syn data
-# videos=('bronch_real_aero1' 'bronch_real_aero2' 'bronch_real_aero3' 'bronch_real_aero4' 'bronch_real_aero5' 'bronch_real_aero6' 'bronch_real_aero7' 'bronch_real_aero8' 'bronch_real_aero9' 'bronch_real_aero10' 'bronch_real_aero11' 'bronch_real_aero12' 'bronch_real_aero13' 'bronch_real_aero14' 'bronch_real_aero15')
-videos=('bronch_real_aero1')
-for video in "${videos[@]}"; do
-    python eval/eval_pose.py device='cuda:0' \
-        data_root="./${video}" \
-        eval.start_idx=0 \
-        eval.end_idx=-1 \
-        eval.subsample=10
-done
+#!/usr/bin/env bash
+# Evaluate on the BronchOpt synthetic benchmark (AeroPath sequences bronch_real_aero1..15).
+# Run from the repository root.
+
+# One sequence:
+python eval_pose.py device='cuda:0' \
+    data_root='./processed/bronch_real_aero1' \
+    output='output' \
+    eval.start_idx=0 \
+    eval.end_idx=-1 \
+    eval.subsample=10
+
+# All sequences under dataset_root (writes output/summary.txt over all of them):
+# python eval_pose.py device='cuda:0' data_root='all' dataset_root='./processed' output='output'
